@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOL Pump Alerts</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#14171a;--mu:#6b7280;--bd:#e5e7eb;--ok:#0f9d58;--bad:#d93025;--ac:#6d4aff}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1013;--card:#171a1f;--tx:#e8eaed;--mu:#9aa0a6;--bd:#2a2e35;--ok:#34d399;--bad:#f87171;--ac:#8b7bff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,sans-serif;padding:16px}
+main{max-width:760px;margin:auto}h1{font-size:20px;margin:0 0 4px}p.s{color:var(--mu);margin:0 0 16px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,button{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx)}
+input.addr{flex:1;min-width:200px}input.num{width:70px}
+button{background:var(--ac);color:#fff;border:0;cursor:pointer}button.g{background:transparent;color:var(--mu);border:1px solid var(--bd)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd);font-size:14px}
+th{color:var(--mu);font-weight:500;font-size:12px}.up{color:var(--ok);font-weight:600}.dn{color:var(--bad)}
+.hit{background:rgba(52,211,153,.12)}a{color:var(--ac)}.mu{color:var(--mu);font-size:12px}
+.wrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>SOL Pump Alerts</h1>
+<p class="s">Watches Solana tokens on DexScreener and notifies you when one rises above your threshold.</p>
+
+<div class="card">
+  <div class="row">
+    <label>Alert when up more than <input id="th" class="num" type="number" value="10" min="0" step="1">%</label>
+    <label>over <select id="tf"><option value="m5">5 min</option><option value="h1" selected>1 hour</option><option value="h6">6 hours</option><option value="h24">24 hours</option></select></label>
+    <button id="en" class="g">Enable notifications</button>
+  </div>
+  <div class="mu" id="st" style="margin-top:8px">Checking every 30s.</div>
+</div>
+
+<div class="card">
+  <div class="row"><strong>Instant graduation feed (live, on-chain)</strong></div>
+  <div class="row" style="margin-top:8px">
+    <input id="hk" class="addr" type="password" placeholder="Helius API key (free at helius.dev)">
+    <button id="gc">Connect</button>
+    <button id="gd" class="g">Stop</button>
+  </div>
+  <div class="mu" id="gst" style="margin:8px 0">Not connected.</div>
+  <div class="wrap"><table><thead><tr><th>Token</th><th>When</th></tr></thead>
+  <tbody id="gf"><tr><td colspan="2" class="mu">Graduations appear here the moment they happen.</td></tr></tbody></table></div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <label><input id="auto" type="checkbox" checked> Auto-scan new &amp; trending Solana tokens</label>
+    <label>Mode <select id="mode"><option value="grad" selected>Pump.fun graduations</option><option value="pct">% gain</option></select></label>
+    <label>Max age <input id="ag" class="num" type="number" value="30" min="1"> min</label>
+    <label>Min liquidity $<input id="ml" class="num" style="width:90px" type="number" value="5000" min="0" step="1000"></label>
+  </div>
+  <div class="mu" id="ast" style="margin:8px 0">Scans every 60s.</div>
+  <div class="wrap"><table><thead><tr><th>Token</th><th>Age / Change</th><th>Liquidity</th></tr></thead>
+  <tbody id="hits"><tr><td colspan="3" class="mu">Nothing above your threshold yet.</td></tr></tbody></table></div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <input id="addr" class="addr" placeholder="Paste Solana token address (mint)">
+    <button id="add">Add</button>
+  </div>
+  <div class="mu" style="margin-top:6px">Tip: copy the token address from its DexScreener page. Up to 30 tokens.</div>
+</div>
+
+<div class="card wrap">
+  <table><thead><tr><th>Token</th><th>Price</th><th>Change</th><th>Liquidity</th><th></th></tr></thead>
+  <tbody id="body"><tr><td colspan="5" class="mu">No tokens yet. Add one above.</td></tr></tbody></table>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let list=[],alerted=new Set(),data={};
+try{list=JSON.parse(localStorage.getItem('tokens')||'[]');$('th').value=localStorage.getItem('th')||10;$('tf').value=localStorage.getItem('tf')||'h1'}catch(e){}
+const save=()=>{try{localStorage.setItem('tokens',JSON.stringify(list));localStorage.setItem('th',$('th').value);localStorage.setItem('tf',$('tf').value)}catch(e){}};
+const fmt=n=>n==null?'-':n>=1?n.toLocaleString(undefined,{maximumFractionDigits:2}):Number(n).toPrecision(3);
+const usd=n=>n==null?'-':'$'+(n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0));
+function beep(){try{const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.1;o.start();o.stop(c.currentTime+.25)}catch(e){}}
+function notify(t,ch){beep();if('Notification' in window&&Notification.permission==='granted'){new Notification(t.baseToken.symbol+' is up '+ch.toFixed(1)+'%',{body:'$'+fmt(+t.priceUsd)+' - click DexScreener to view'})}}
+async function poll(){
+  if(!list.length){render();return}
+  try{
+    const r=await fetch('https://api.dexscreener.com/tokens/v1/solana/'+list.join(','));
+    const pairs=await r.json();data={};
+    for(const p of pairs){const k=p.baseToken.address;if(!data[k]||(p.liquidity?.usd||0)>(data[k].liquidity?.usd||0))data[k]=p}
+    const th=+$('th').value,tf=$('tf').value;
+    for(const k in data){const ch=data[k].priceChange?.[tf];
+      if(ch!=null&&ch>=th){if(!alerted.has(k)){alerted.add(k);notify(data[k],ch)}}else alerted.delete(k)}
+    $('st').textContent='Last checked '+new Date().toLocaleTimeString()+'. Checking every 30s.';
+  }catch(e){$('st').textContent='Could not reach DexScreener. Retrying...'}
+  render();
+}
+function render(){
+  const th=+$('th').value,tf=$('tf').value,b=$('body');
+  if(!list.length){b.innerHTML='<tr><td colspan="5" class="mu">No tokens yet. Add one above.</td></tr>';return}
+  b.innerHTML='';
+  for(const k of list){
+    const p=data[k],tr=document.createElement('tr');
+    if(!p){tr.innerHTML='<td class="mu"></td><td colspan="3" class="mu">Loading or not found...</td><td></td>';tr.children[0].textContent=k.slice(0,6)+'...'}
+    else{const ch=p.priceChange?.[tf];if(ch>=th)tr.className='hit';
+      tr.innerHTML='<td></td><td>$'+fmt(+p.priceUsd)+'</td><td class="'+(ch>=0?'up':'dn')+'">'+(ch==null?'-':(ch>0?'+':'')+ch+'%')+'</td><td>'+usd(p.liquidity?.usd)+'</td><td></td>';
+      const a=document.createElement('a');a.href=p.url;a.target='_blank';a.rel='noopener';a.textContent=p.baseToken.symbol;tr.children[0].appendChild(a)}
+    const x=document.createElement('button');x.className='g';x.textContent='Remove';x.onclick=()=>{list=list.filter(i=>i!==k);alerted.delete(k);save();render()};
+    tr.lastElementChild.appendChild(x);b.appendChild(tr);
+  }
+}
+$('add').onclick=()=>{const v=$('addr').value.trim();if(v&&!list.includes(v)&&list.length<30){list.push(v);$('addr').value='';save();poll()}};
+$('en').onclick=async()=>{if('Notification' in window){const r=await Notification.requestPermission();$('en').textContent=r==='granted'?'Notifications on':'Notifications blocked'}};
+if('Notification' in window&&Notification.permission==='granted')$('en').textContent='Notifications on';
+$('th').onchange=$('tf').onchange=()=>{alerted.clear();save();poll();scan()};
+poll();setInterval(poll,30000);
+let found={};
+async function scan(){
+  if(!$('auto').checked){$('ast').textContent='Auto-scan is off.';return}
+  try{
+    const u=['token-profiles/latest/v1','token-boosts/latest/v1','token-boosts/top/v1'];
+    const res=await Promise.all(u.map(x=>fetch('https://api.dexscreener.com/'+x).then(r=>r.json()).catch(()=>[])));
+    const addrs=[...new Set(res.flat().filter(t=>t&&t.chainId==='solana').map(t=>t.tokenAddress))];
+    const best={},add=p=>{const k=p.baseToken.address;if(!best[k]||(p.liquidity?.usd||0)>(best[k].liquidity?.usd||0))best[k]=p};
+    const srch=await Promise.all(['pumpswap','pump'].map(q=>fetch('https://api.dexscreener.com/latest/dex/search?q='+q).then(r=>r.json()).catch(()=>({}))));
+    for(const r of srch)for(const p of (r.pairs||[]))if(p.chainId==='solana')add(p);
+    for(let i=0;i<addrs.length;i+=30){
+      const r=await fetch('https://api.dexscreener.com/tokens/v1/solana/'+addrs.slice(i,i+30).join(','));
+      for(const p of await r.json())add(p)
+    }
+    const th=+$('th').value,tf=$('tf').value,ml=+$('ml').value||0,grad=$('mode').value==='grad',maxAge=(+$('ag').value||30)*60000;
+    found={};
+    for(const k in best){const p=best[k],ch=p.priceChange?.[tf],liq=p.liquidity?.usd||0;
+      const ok=grad?(p.dexId==='pumpswap'&&p.pairCreatedAt&&Date.now()-p.pairCreatedAt<=maxAge):(ch!=null&&ch>=th);
+      if(ok&&liq>=ml){found[k]=p;if(!alerted.has('s'+k)){alerted.add('s'+k);
+        if(grad){beep();if('Notification' in window&&Notification.permission==='granted')new Notification(p.baseToken.symbol+' graduated from pump.fun',{body:'$'+fmt(+p.priceUsd)+' - liquidity '+usd(liq)})}
+        else notify(p,ch)}}
+      else alerted.delete('s'+k)}
+    $('ast').textContent='Scanned '+Object.keys(best).length+' tokens at '+new Date().toLocaleTimeString()+'. Scans every 60s.';
+  }catch(e){$('ast').textContent='Scan failed (rate limit or network). Retrying...'}
+  renderHits();
+}
+function renderHits(){
+  const grad=$('mode').value==='grad',tf=$('tf').value,b=$('hits');
+  const ks=Object.keys(found).sort((a,c)=>grad?found[c].pairCreatedAt-found[a].pairCreatedAt:found[c].priceChange[tf]-found[a].priceChange[tf]);
+  b.innerHTML='';
+  if(!ks.length){b.innerHTML='<tr><td colspan="3" class="mu">Nothing matching yet.</td></tr>';return}
+  for(const k of ks){const p=found[k],tr=document.createElement('tr');tr.className='hit';
+    tr.innerHTML='<td></td><td class="up"></td><td></td>';
+    const a=document.createElement('a');a.href=p.url;a.target='_blank';a.rel='noopener';a.textContent=p.baseToken.symbol;
+    tr.children[0].appendChild(a);
+    tr.children[1].textContent=grad?Math.max(0,Math.round((Date.now()-p.pairCreatedAt)/60000))+' min old':'+'+p.priceChange[tf]+'%';
+    tr.children[2].textContent=usd(p.liquidity?.usd);b.appendChild(tr)}
+}
+$('auto').onchange=$('ml').onchange=$('mode').onchange=$('ag').onchange=()=>{save();scan()};
+scan();setInterval(scan,60000);
+
+
+const WSOL='So11111111111111111111111111111111111111112',MIG='39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg';
+let ws,hb,rt,wl,want=false,feed=[];
+const gstat=t=>$('gst').textContent=t;
+const short=m=>m?m.slice(0,4)+'...'+m.slice(-4):'unknown';
+async function lock(){try{if('wakeLock' in navigator)wl=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(want&&document.visibilityState==='visible'){lock();if(!ws||ws.readyState>1)gconnect()}});
+function gconnect(){
+  const key=$('hk').value.trim();
+  if(!key){gstat('Paste your Helius API key first.');return}
+  try{localStorage.setItem('hk',key);localStorage.setItem('gon','1')}catch(e){}
+  want=true;lock();clearTimeout(rt);clearInterval(hb);
+  if(ws){ws.onclose=null;try{ws.close()}catch(e){}}
+  ws=new WebSocket('wss://mainnet.helius-rpc.com/?api-key='+encodeURIComponent(key));
+  ws.onopen=()=>{
+    ws.send(JSON.stringify({jsonrpc:'2.0',id:1,method:'logsSubscribe',params:[{mentions:[MIG]},{commitment:'confirmed'}]}));
+    gstat('Connected. Listening for graduations...');
+    hb=setInterval(()=>{try{ws.send('{"jsonrpc":"2.0","id":9,"method":"getHealth"}')}catch(e){}},30000);
+  };
+  ws.onmessage=e=>{
+    let m;try{m=JSON.parse(e.data)}catch(x){return}
+    if(m.error&&m.id===1){gstat('Connection error: '+(m.error.message||'check your API key'));return}
+    if(m.method!=='logsNotification')return;
+    const v=m.params.result.value;
+    if(v.err||!v.logs.some(l=>l.includes('Instruction: Migrate')))return;
+    onMig(v.signature);
+  };
+  ws.onerror=()=>{try{ws.close()}catch(e){}};
+  ws.onclose=()=>{clearInterval(hb);if(want){gstat('Disconnected. Reconnecting...');rt=setTimeout(gconnect,3000)}};
+}
+function gstop(){want=false;try{localStorage.setItem('gon','0')}catch(e){}clearTimeout(rt);clearInterval(hb);if(ws){ws.onclose=null;try{ws.close()}catch(e){}}try{wl&&wl.release()}catch(e){}gstat('Stopped.')}
+async function onMig(sig){
+  const key=$('hk').value.trim();let mint=null;
+  for(let i=0;i<5&&!mint;i++){
+    try{
+      const r=await fetch('https://mainnet.helius-rpc.com/?api-key='+encodeURIComponent(key),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'getTransaction',params:[sig,{encoding:'jsonParsed',maxSupportedTransactionVersion:0,commitment:'confirmed'}]})});
+      const tx=(await r.json()).result;
+      if(tx){const ms=[...new Set([...(tx.meta.postTokenBalances||[]),...(tx.meta.preTokenBalances||[])].map(b=>b.mint))].filter(x=>x!==WSOL);
+        mint=ms.find(x=>x.endsWith('pump'))||ms[0]||null;if(!mint)break}
+    }catch(e){}
+    if(!mint)await new Promise(r=>setTimeout(r,1500));
+  }
+  const item={t:Date.now(),mint,sig,sym:null};
+  feed.unshift(item);feed=feed.slice(0,30);renderFeed();
+  beep();
+  if('Notification' in window&&Notification.permission==='granted'){
+    const n=new Notification('Pump.fun graduation: '+short(mint),{body:'Just migrated to PumpSwap. Tap to open DexScreener.'});
+    n.onclick=()=>window.open(mint?'https://dexscreener.com/solana/'+mint:'https://solscan.io/tx/'+sig,'_blank');
+  }
+  if(mint)setTimeout(async()=>{try{const r=await fetch('https://api.dexscreener.com/tokens/v1/solana/'+mint);const a=await r.json();if(a[0]){item.sym=a[0].baseToken.symbol;renderFeed()}}catch(e){}},8000);
+}
+function renderFeed(){
+  const b=$('gf');b.innerHTML='';
+  if(!feed.length){b.innerHTML='<tr><td colspan="2" class="mu">Graduations appear here the moment they happen.</td></tr>';return}
+  for(const it of feed){
+    const tr=document.createElement('tr');tr.className='hit';tr.innerHTML='<td></td><td class="mu"></td>';
+    const a=document.createElement('a');a.target='_blank';a.rel='noopener';
+    a.href=it.mint?'https://dexscreener.com/solana/'+it.mint:'https://solscan.io/tx/'+it.sig;
+    a.textContent=it.sym||short(it.mint);tr.children[0].appendChild(a);
+    tr.children[1].textContent=new Date(it.t).toLocaleTimeString();b.appendChild(tr);
+  }
+}
+$('gc').onclick=gconnect;$('gd').onclick=gstop;
+try{$('hk').value=localStorage.getItem('hk')||'';if(localStorage.getItem('gon')==='1'&&$('hk').value)gconnect()}catch(e){}
+</script>
+</body>
+</html>
